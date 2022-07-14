@@ -4,3 +4,6 @@
 # python cache
 *.pyc
 __pycache__/
+
+# local release files
+release/
