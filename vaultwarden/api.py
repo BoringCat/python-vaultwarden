@@ -5,13 +5,12 @@ import uuid
 import hashlib
 import requests
 from copy import deepcopy
-from Crypto.PublicKey import RSA
-from Crypto.Hash import SHA, SHA256
-from passlib.hash import pbkdf2_sha256
 from base64 import b64decode, b64encode
 from datetime import datetime, timedelta
 from typing import Callable, Dict, Tuple
-from Crypto.Cipher import AES, PKCS1_OAEP
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
 
 TYPE_AESCBC256_B64 = 0
 TYPE_AESCBC128_HMACSHA256_B64 = 1
@@ -91,10 +90,12 @@ class VaultwardenAPI():
     @property
     def masterKey(self):
         if not self.__masterKey:
-            masterKeyPerB64 = pbkdf2_sha256.hash(self.__masterPassword.encode('UTF-8'), salt=self.__email.encode('UTF-8'), rounds=self.KdfIterations).split('$')[4]
-            if len(masterKeyPerB64) % 2 != 0:
-                masterKeyPerB64 += '='
-            self.__masterKey = b64decode(masterKeyPerB64)
+            self.__masterKey = hashlib.pbkdf2_hmac(
+                hash_name = 'sha256',
+                password = self.__masterPassword.encode('UTF-8'), 
+                salt = self.__email.encode('UTF-8'),
+                iterations = self.KdfIterations
+            )
         return self.__masterKey
     @property
     def deviceId(self): return self.__devInfo['device_id']
@@ -196,7 +197,7 @@ class VaultwardenAPI():
         except:
             pass
 
-    def _persureResponse(self, resp:requests.Response):
+    def _persureResponse(self, resp:requests.Response) -> dict:
         if resp.status_code != 200:
             raise HttpStatusErrror("HTTP status code: %s; message: %s" % (resp.status_code, resp.text))
         return resp.json()
@@ -210,10 +211,8 @@ class VaultwardenAPI():
     def getHashedPassword(self) -> str:
         if self.Kdf != 0:
             raise UnSupportKdfError("hash password only support Kdf == 0 (PBKDF2_SHA256)")
-        hashedPassword = pbkdf2_sha256.hash(self.masterKey, salt=self.__masterPassword.encode('UTF-8'), rounds=1).split('$')[4]
-        if len(hashedPassword) % 2 != 0:
-            hashedPassword += '='
-        return hashedPassword
+        hashlibPwd = b64encode(hashlib.pbkdf2_hmac('sha256', self.masterKey, self.__masterPassword.encode('UTF-8'), 1)).decode()
+        return hashlibPwd
 
     def identity_token(self, hashedPassword:str) -> dict:
         uri = self.baseUrl + '/identity/connect/token'
@@ -271,7 +270,7 @@ class VaultwardenAPI():
             hpwd = self.getHashedPassword()
             self.identity_token(hpwd)
 
-    def sync(self, after:int = 0) -> dict:
+    def sync(self, after:int = 0):
         if (datetime.now() - self.__devInfo['last_sync']).total_seconds() < after:
             return
         if self.__ident['token_expiry'] < datetime.now():
@@ -287,7 +286,9 @@ class VaultwardenAPI():
         self.__fullDecrypt()
         self.saveDevInfo()
         self.saveSync()
-        return self.__sync.copy()
+
+    def dump(self) -> dict:
+        return deepcopy(self.__sync)
 
     def decryptUserData(self, data:str):
         return decryptWith(CipherString(data), self.decryptKey, self.decryptHmacKey)
@@ -305,27 +306,26 @@ class VaultwardenAPI():
             self.__decrypt_folders[name] = f['Id']
 
     def __fullCiphersDecrypt(self):
-        def decryptUserData(d:str) -> str:
+        def decryptData(d:str) -> str:
             if not d:
                 return d
-            return decryptWith(CipherString(d), self.decryptKey, self.decryptHmacKey).decode('UTF-8')
-        def decryptOrgData(d:str) -> str:
-            if not d:
-                return d
-            return rsaDecryptWith(CipherString(d), self.decryptPrivateKey).decode('UTF-8')
+            s = CipherString(d)
+            if s.Type in [TYPE_AESCBC256_B64, TYPE_AESCBC256_HMACSHA256_B64]:
+                return decryptWith(s, self.decryptKey, self.decryptHmacKey).decode('UTF-8')
+            elif s.Type in [
+                    TYPE_RSA2048_OAEPSHA1_B64, TYPE_RSA2048_OAEPSHA1_HMACSHA256_B64,
+                    TYPE_RSA2048_OAEPSHA256_B64, TYPE_RSA2048_OAEPSHA256_HMACSHA256_B64
+                ]:
+                return rsaDecryptWith(s, self.decryptPrivateKey).decode('UTF-8')
+            else:
+                raise DecryptUnSupportTypeError(s.Type)
         self.__decrypt_ciphers = {}
         for c in self.__sync['Ciphers']:
             if c['Type'] == 1: # Login
-                if c['OrganizationId']:
-                    d = self.__decryptLoginData(c, decryptOrgData)
-                else:
-                    d = self.__decryptLoginData(c, decryptUserData)
+                d = self.__decryptLoginData(c, decryptData)
                 self.__decrypt_ciphers[d['Name']] = d
             elif c['Type'] == 2: # SecureNote
-                if c['OrganizationId']:
-                    d = self.__decryptSecureNoteData(c, decryptOrgData)
-                else:
-                    d = self.__decryptSecureNoteData(c, decryptUserData)
+                d = self.__decryptSecureNoteData(c, decryptData)
                 self.__decrypt_ciphers[d['Name']] = d
 
     @staticmethod
@@ -335,14 +335,14 @@ class VaultwardenAPI():
         resp['Data']['Password'] = decryptFunc(cipher['Data']['Password'])
         resp['Data']['Totp'] = decryptFunc(cipher['Data']['Totp'])
         resp['Data']['Uri'] = decryptFunc(cipher['Data']['Uri'])
-        for idx, uri in enumerate(cipher['Data']['Uris']):
+        for idx, uri in enumerate(cipher['Data']['Uris'] or []):
             resp['Data']['Uris'][idx]['Uri'] = decryptFunc(uri['Uri'])
         if cipher['Data']['Fields']:
-            for idx, field in enumerate(cipher['Data']['Fields']):
+            for idx, field in enumerate(cipher['Data']['Fields'] or []):
                 resp['Data']['Fields'][idx]['Name'] = decryptFunc(field['Name'])
                 resp['Data']['Fields'][idx]['Value'] = decryptFunc(field['Value'])
         if cipher['Data']['PasswordHistory']:
-            for idx, his in enumerate(cipher['Data']['PasswordHistory']):
+            for idx, his in enumerate(cipher['Data']['PasswordHistory'] or []):
                 resp['Data']['PasswordHistory'][idx]['Password'] = decryptFunc(his['Password'])
                 resp['Data']['PasswordHistory'][idx]['LastUsedDate'] = datetime.strptime(his['LastUsedDate'], '%Y-%m-%dT%H:%M:%S.%fZ')
         resp['Data']['Username'] = decryptFunc(cipher['Data']['Username'])
@@ -350,14 +350,14 @@ class VaultwardenAPI():
         resp['Login']['Totp'] = decryptFunc(cipher['Login']['Totp'])
         resp['Login']['Uri'] = decryptFunc(cipher['Login']['Uri'])
         resp['Login']['Username'] = decryptFunc(cipher['Login']['Username'])
-        for idx, uri in enumerate(cipher['Login']['Uris']):
+        for idx, uri in enumerate(cipher['Login']['Uris'] or []):
             resp['Login']['Uris'][idx]['Uri'] = decryptFunc(uri['Uri'])
         if cipher['Fields']:
-            for idx, field in enumerate(cipher['Fields']):
+            for idx, field in enumerate(cipher['Fields'] or []):
                 resp['Fields'][idx]['Name'] = decryptFunc(field['Name'])
                 resp['Fields'][idx]['Value'] = decryptFunc(field['Value'])
         if cipher['PasswordHistory']:
-            for idx, his in enumerate(cipher['PasswordHistory']):
+            for idx, his in enumerate(cipher['PasswordHistory'] or []):
                 resp['PasswordHistory'][idx]['Password'] = decryptFunc(his['Password'])
                 resp['PasswordHistory'][idx]['LastUsedDate'] = datetime.strptime(his['LastUsedDate'], '%Y-%m-%dT%H:%M:%S.%fZ')
         resp['Name'] = decryptFunc(cipher['Name'])
@@ -443,9 +443,11 @@ def decryptWith(s:CipherString, key:bytes, macKey:bytes) -> bytes:
         expectedMAC = mac.digest()
         if not hmac.compare_digest(s.MAC, expectedMAC):
             raise DecryptHmacMisMatchError()
-    block = AES.new(key, AES.MODE_CBC, s.IV)
-    dst = block.decrypt(s.CT)
-    return unpadPKCS7(dst, block.block_size)
+    cipher = Cipher(algorithms.AES(key), modes.CBC(s.IV))
+    dst = cipher.decryptor()
+    block = dst.update(s.CT) + dst.finalize()
+    data = unpadPKCS7(block, algorithms.AES.block_size / 16)
+    return data
 
 def rsaDecryptWith(s:CipherString, privateKey:bytes) -> bytes:
     if s.Type not in [
@@ -453,13 +455,16 @@ def rsaDecryptWith(s:CipherString, privateKey:bytes) -> bytes:
             TYPE_RSA2048_OAEPSHA256_B64, TYPE_RSA2048_OAEPSHA256_HMACSHA256_B64
         ]:
         raise DecryptUnSupportTypeError()
-    
-    pri = RSA.importKey(privateKey)
+
+    pri:rsa.RSAPrivateKey = serialization.load_der_private_key(privateKey)
+
     if s.Type in [TYPE_RSA2048_OAEPSHA256_B64, TYPE_RSA2048_OAEPSHA256_HMACSHA256_B64]:
-        return PKCS1_OAEP.new(pri, hashAlgo=SHA256).decrypt(s.CT)
+        oaep = padding.OAEP(mgf=padding.PKCS1v15(), algorithm=hashes.SHA256())
     elif s.Type in [TYPE_RSA2048_OAEPSHA1_B64, TYPE_RSA2048_OAEPSHA1_HMACSHA256_B64]:
-        return PKCS1_OAEP.new(pri, hashAlgo=SHA).decrypt(s.CT)
-    raise DecryptUnSupportTypeError()
+        oaep = padding.OAEP(mgf=padding.PKCS1v15(), algorithm=hashes.SHA1())
+    else:
+        raise DecryptUnSupportTypeError()
+    return pri.decrypt(s.CT, oaep)
 
 def goUTCStrftime(time:datetime) -> str:
     return datetime.utcfromtimestamp(time.timestamp()).strftime("%Y-%m-%dT%H:%M:%S.%f00Z")

@@ -6,12 +6,12 @@
 
 ## 依赖要求
 注：requirement.txt 附带的版本号为开发使用的版本  
-- python >= 3, < 3.10  
+- python >= 3
   请根据 pycrypto 支持情况自行决定Python版本
-- requests>=2.27.1
+- requests>=2.31.0
 - passlib>=1.7.4
 - hkdf>=0.0.3
-- pycrypto>=2.6.1
+- cryptography>=41.0.5
 
 ## 使用方法
 ```python

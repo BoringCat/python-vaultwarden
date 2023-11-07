@@ -4,6 +4,8 @@
 # python cache
 *.pyc
 __pycache__/
+build/
+*.egg-info/
 
 # local release files
 release/
