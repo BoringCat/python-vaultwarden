@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name="python-vaultwarden",
-    version="0.0.3",
+    version="0.0.4",
     author="BoringCat",
     author_email="c654477757@gmail.com",
     description="Simple VaultWarden API for Python",
@@ -17,6 +17,7 @@ setup(
         'passlib>=1.7.4',
         'hkdf>=0.0.3',
         'cryptography>=41.0.5',
+        'argon2-cffi>=23.1.0',
     ],
     python_requires='>=3',
 )
