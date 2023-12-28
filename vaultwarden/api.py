@@ -117,18 +117,18 @@ class VaultwardenAPI():
     def decryptedCiphers(self): return deepcopy(self.__decrypt_ciphers)
     @property
     def decryptedFolders(self): return deepcopy(self.__decrypt_folders)
-    def __init__(self, baseUrl:str, email:str, masterPassword:str) -> None:
+    def __init__(self, baseUrl:str, email:str, masterPassword:str, configPath:str = None) -> None:
         self.__init_vars()
         self.__baseUrl = baseUrl.rstrip("/")
         self.__email = email
         self.__masterPassword = masterPassword
         self.__session = requests.session()
-        configDir = os.path.join(os.path.expanduser('~'), ".config", "bitwarden-http-api")
-        if not os.path.exists(configDir):
-            os.makedirs(configDir)
-        self.__deviceInfoFile = os.path.join(configDir, "deviceInfo.json")
-        self.__syncFile = os.path.join(configDir, "syncData.json")
-        self.__idnetFile = os.path.join(configDir, "tokenInfo.json")
+        configPath = configPath or os.path.join(os.path.expanduser('~'), ".config", "python-vaultwarden")
+        if not os.path.exists(configPath):
+            os.makedirs(configPath)
+        self.__deviceInfoFile = os.path.join(configPath, "deviceInfo.json")
+        self.__syncFile = os.path.join(configPath, "syncData.json")
+        self.__idnetFile = os.path.join(configPath, "tokenInfo.json")
         self.loadDevInfo()
         self.loadIdent()
         self.loadSync()

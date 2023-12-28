@@ -8,4 +8,6 @@ build/
 *.egg-info/
 
 # local release files
-release/
+dist/
+build/
+*.egg-info/

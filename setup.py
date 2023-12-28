@@ -1,8 +1,8 @@
-from setuptools import setup, find_packages
+from setuptools import setup
 
 setup(
     name="python-vaultwarden",
-    version="0.0.2",
+    version="0.0.3",
     author="BoringCat",
     author_email="c654477757@gmail.com",
     description="Simple VaultWarden API for Python",
